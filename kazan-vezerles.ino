@@ -3,6 +3,7 @@
 #include <WiFiClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <MAX6675_Thermocouple.h>
 
 #define VERSION "1.6"
 #define ONE_WIRE_BUS D3 //Pin to which is attached a temperature sensor
@@ -14,6 +15,12 @@
 #define KAZAN "28ff2dbda416041f" //kazán
 #define PUFFER_1_3M "28ff7984011703ca" //puffer 1 (5M)
 #define PUFFER_2_5M "28ff43be601703ae" //puffer 2 (3M)
+
+//K-Type definition 
+int SCK_PIN = D1;
+int CS_PIN = D2;
+int SO_PIN = D4;
+MAX6675_Thermocouple thermocouple(SCK_PIN, CS_PIN, SO_PIN);
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -40,7 +47,7 @@ String writeAPIKey = "14JG781773HS7E82";
 const char* tsServer = "api.thingspeak.com";
 
 //Thinkgspeak update
-void UdateThinkSpeakChannel (float kazanTemp, float pufferUpTemp, float pufferDownTemp) {
+void UdateThinkSpeakChannel (float kazanTemp, float pufferUpTemp, float pufferDownTemp, float fustGazTemp) {
   if (client.connect(tsServer, 80)) {
 
     // Construct API request body
@@ -55,6 +62,8 @@ void UdateThinkSpeakChannel (float kazanTemp, float pufferUpTemp, float pufferDo
     postStr += String(kazanSzivOn);
     postStr += "&field5=";
     postStr += String(biztonsagiSzivOn);
+    postStr += "&field6=";
+    postStr += String(fustGazTemp);
     postStr += "\r\n\r\n";
 
     client.print("POST /update HTTP/1.1\n");
@@ -132,6 +141,7 @@ void TempLoop(long now) {
     float kazanTempC;
     float puffer1TempC;
     float puffer2TempC;
+    float fustGazTempC = thermocouple.readCelsius();
 
     for (int i = 0; i < ONE_WIRE_MAX_DEV; i++) {
       if (GetAddressToString( devAddr[i] ) == KAZAN ) {
@@ -154,16 +164,20 @@ void TempLoop(long now) {
     }
 
     if (now - lastCheck > durationCheck) { //Check kazan and puffer temps in fixed time
+      //TODO calculate with fustGazTempC
+      
       float pufferAvg = (puffer1TempC + puffer2TempC) / 2;
 
       if (kazanSzivOn == 1) {
-        if (((kazanTempC <= 88) && ((kazanTempC < pufferAvg - 1) || (kazanTempC < puffer1TempC - 3) || (kazanTempC < puffer2TempC))) || kazanTempC < 63) {
+        bool turnOff = (kazanTempC <= 88) && ((kazanTempC < pufferAvg - 1) || (kazanTempC < puffer1TempC - 3) || (kazanTempC < puffer2TempC));
+        if (turnOff || kazanTempC < 63) {
           digitalWrite(RELE1, HIGH);
           digitalWrite(LED_GREEN, LOW);
           kazanSzivOn = 0;
         }
       } else {
-        if (((kazanTempC > 64) && (kazanTempC > pufferAvg + 1) && (kazanTempC >= puffer1TempC - 3) && (kazanTempC >= puffer2TempC)) || (kazanTempC > 88)) {
+        bool turnOn = (kazanTempC > 64) && (kazanTempC > pufferAvg + 1) && (kazanTempC >= puffer1TempC - 3) && (kazanTempC >= puffer2TempC);
+        if (turnOn || (kazanTempC > 88)) {
           digitalWrite(RELE1, LOW);
           digitalWrite(LED_GREEN, HIGH);
           kazanSzivOn = 1;
@@ -182,7 +196,7 @@ void TempLoop(long now) {
         biztonsagiSzivOn = 0;
       }
 
-      UdateThinkSpeakChannel(kazanTempC, puffer1TempC, puffer2TempC);
+      UdateThinkSpeakChannel(kazanTempC, puffer1TempC, puffer2TempC, fustGazTempC);
       
       lastCheck = millis();
     }
