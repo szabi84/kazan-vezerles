@@ -5,7 +5,7 @@
 #include <DallasTemperature.h>
 #include <MAX6675_Thermocouple.h>
 
-#define VERSION "1.6"
+#define VERSION "1.7"
 #define ONE_WIRE_BUS D3 //Pin to which is attached a temperature sensor
 #define ONE_WIRE_MAX_DEV 3 //The maximum number of devices
 #define RELE1 D5
@@ -15,8 +15,11 @@
 #define KAZAN "28ff2dbda416041f" //kazán
 #define PUFFER_1_3M "28ff7984011703ca" //puffer 1 (5M)
 #define PUFFER_2_5M "28ff43be601703ae" //puffer 2 (3M)
+#define STANDBY 0
+#define HEATING_HIGH 1
+#define HEATING_LOW 2
 
-//K-Type definition 
+//K-Type definition
 int SCK_PIN = D1;
 int CS_PIN = D2;
 int SO_PIN = D4;
@@ -32,6 +35,7 @@ const int durationTemp = 5000; //The frequency of temperature measurement
 const int durationCheck = 30000; //The frequency of check kazan and puffer temps
 int kazanSzivOn = 0;
 int biztonsagiSzivOn = 0;
+int statusMachine = 0; // STANDBY, HEATING_HIGH, HEATING_LOW
 
 //WIFI
 const char* ssid = "GM_Net";
@@ -135,6 +139,17 @@ void SetupDS18B20() {
   }
 }
 
+//evaluate status machine from fustGazTemp
+void evaluateStatusMachine(float fustGazTempC) {
+  if (fustGazTempC < 110) {
+    statusMachine = STANDBY;
+  } else if (fustGazTempC > 135) {
+    statusMachine = HEATING_HIGH;
+  } else {
+    statusMachine = HEATING_LOW;
+  }
+}
+
 //Loop measuring the temperature
 void TempLoop(long now) {
   if ( now - lastTemp > durationTemp ) { //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
@@ -164,27 +179,45 @@ void TempLoop(long now) {
     }
 
     if (now - lastCheck > durationCheck) { //Check kazan and puffer temps in fixed time
-      //TODO calculate with fustGazTempC
-      
+      evaluateStatusMachine(fustGazTempC);
+
       float pufferAvg = (puffer1TempC + puffer2TempC) / 2;
+      int safetyLimit = 88;
+      bool turnOff = false;
+      bool turnOn = true;
+      switch (statusMachine) {
+        case STANDBY:
+          safetyLimit = 92;
+          turnOff = (kazanTempC <= 88) && (kazanTempC < puffer1TempC);
+          turnOn = (kazanTempC > 64) && (kazanTempC > puffer1TempC);
+          break;
+        case HEATING_HIGH:
+          safetyLimit = 88;
+          turnOff = (kazanTempC <= 88) && ((kazanTempC < pufferAvg - 1) || (kazanTempC < puffer1TempC - 3) || (kazanTempC < puffer2TempC));
+          turnOn = (kazanTempC > 64) && (kazanTempC > pufferAvg + 1) && (kazanTempC >= puffer1TempC - 3) && (kazanTempC >= puffer2TempC);
+          break;
+        case HEATING_LOW:
+          safetyLimit = 88;
+          turnOff = (kazanTempC <= 88) && (kazanTempC < puffer1TempC);
+          turnOn = (kazanTempC > 64) && (kazanTempC > puffer1TempC);
+          break;
+        default:
+          break;
+      }
 
       if (kazanSzivOn == 1) {
-        bool turnOff = (kazanTempC <= 88) && ((kazanTempC < pufferAvg - 1) || (kazanTempC < puffer1TempC - 3) || (kazanTempC < puffer2TempC));
         if (turnOff || kazanTempC < 63) {
           digitalWrite(RELE1, HIGH);
           digitalWrite(LED_GREEN, LOW);
           kazanSzivOn = 0;
         }
       } else {
-        bool turnOn = (kazanTempC > 64) && (kazanTempC > pufferAvg + 1) && (kazanTempC >= puffer1TempC - 3) && (kazanTempC >= puffer2TempC);
         if (turnOn || (kazanTempC > 88)) {
           digitalWrite(RELE1, LOW);
           digitalWrite(LED_GREEN, HIGH);
           kazanSzivOn = 1;
         }
       }
-
-
 
       if (puffer2TempC > 88) {
         digitalWrite(RELE2, LOW);
@@ -197,7 +230,7 @@ void TempLoop(long now) {
       }
 
       UdateThinkSpeakChannel(kazanTempC, puffer1TempC, puffer2TempC, fustGazTempC);
-      
+
       lastCheck = millis();
     }
 
@@ -211,8 +244,8 @@ void HandleRoot() {
   String message = "<h1>Kazan vezerlo rendszer</h1>";
   message += "\r\n<br>";
   message += "<h3>version";
-   
-  message += VERSION; 
+
+  message += VERSION;
   message += "</h3>";
   message += "\r\n<br>";
   char temperatureString[6];
@@ -246,6 +279,17 @@ void HandleRoot() {
     message += "</td></tr>\r\n";
     message += "\r\n";
   }
+  float fustGazTempC = thermocouple.readCelsius();
+  message += "<tr><td>";
+  message += "Fustgaz";
+  message += "</td>\r\n";
+  message += "<td>";
+  message += "kType";
+  message += "</td>\r\n";
+  message += "<td>";
+  message += fustGazTempC;
+  message += "</td></tr>\r\n";
+  message += "\r\n";
   message += "</table>\r\n";
 
   String kazanSzivOnString;
