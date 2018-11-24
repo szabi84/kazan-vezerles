@@ -12,7 +12,7 @@
 #define LED_GREEN D7
 #define RELE2 D6
 #define LED_RED D8
-#define KAZAN "28ff2dbda416041f" //kazán
+#define BOILER "28ff2dbda416041f" //kazán
 #define PUFFER_1_3M "28ff7984011703ca" //puffer 1 (5M)
 #define PUFFER_2_5M "28ff43be601703ae" //puffer 2 (3M)
 #define STANDBY 0
@@ -33,8 +33,8 @@ long lastTemp; //The last measurement
 long lastCheck; //The last check kazan and puffer temps
 const int durationTemp = 5000; //The frequency of temperature measurement
 const int durationCheck = 30000; //The frequency of check kazan and puffer temps
-int kazanSzivOn = 0;
-int biztonsagiSzivOn = 0;
+int boilerPumpOn = 0;
+int safetyPumpOn = 0;
 int statusMachine = 0; // STANDBY, HEATING_HIGH, HEATING_LOW
 
 //WIFI
@@ -51,23 +51,23 @@ String writeAPIKey = "14JG781773HS7E82";
 const char* tsServer = "api.thingspeak.com";
 
 //Thinkgspeak update
-void UdateThinkSpeakChannel (float kazanTemp, float pufferUpTemp, float pufferDownTemp, float fustGazTemp) {
+void UdateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferDownTemp, float flueGasTemp) {
   if (client.connect(tsServer, 80)) {
 
     // Construct API request body
     String postStr = writeAPIKey;
     postStr += "&field1=";
-    postStr += String(kazanTemp);
+    postStr += String(boilerTemp);
     postStr += "&field2=";
     postStr += String(pufferUpTemp);
     postStr += "&field3=";
     postStr += String(pufferDownTemp);
     postStr += "&field4=";
-    postStr += String(kazanSzivOn);
+    postStr += String(boilerPumpOn);
     postStr += "&field5=";
-    postStr += String(biztonsagiSzivOn);
+    postStr += String(safetyPumpOn);
     postStr += "&field6=";
-    postStr += String(fustGazTemp);
+    postStr += String(flueGasTemp);
     postStr += "\r\n\r\n";
 
     client.print("POST /update HTTP/1.1\n");
@@ -139,11 +139,11 @@ void SetupDS18B20() {
   }
 }
 
-//evaluate status machine from fustGazTemp
-void evaluateStatusMachine(float fustGazTempC) {
-  if (fustGazTempC < 110) {
+//evaluate status machine from flueGasTemp
+void evaluateStatusMachine(float flueGasTempC) {
+  if (flueGasTempC < 110) {
     statusMachine = STANDBY;
-  } else if (fustGazTempC > 135) {
+  } else if (flueGasTempC > 135) {
     statusMachine = HEATING_HIGH;
   } else {
     statusMachine = HEATING_LOW;
@@ -152,16 +152,19 @@ void evaluateStatusMachine(float fustGazTempC) {
 
 //Loop measuring the temperature
 void TempLoop(long now) {
-  if ( now - lastTemp > durationTemp ) { //Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
-    float kazanTempC;
+  if ( now - lastTemp > durationTemp ) {//Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
+    if (WiFi.status() != WL_CONNECTED) {
+      connectWiFi();
+    }
+    float boilerTempC;
     float puffer1TempC;
     float puffer2TempC;
-    float fustGazTempC = thermocouple.readCelsius();
+    float flueGasTempC = thermocouple.readCelsius();
 
     for (int i = 0; i < ONE_WIRE_MAX_DEV; i++) {
-      if (GetAddressToString( devAddr[i] ) == KAZAN ) {
-        kazanTempC = DS18B20.getTempC( devAddr[i] );
-        tempDev[i] = kazanTempC;
+      if (GetAddressToString( devAddr[i] ) == BOILER ) {
+        boilerTempC = DS18B20.getTempC( devAddr[i] );
+        tempDev[i] = boilerTempC;
       } else if (GetAddressToString( devAddr[i] ) == PUFFER_1_3M) {
         puffer1TempC = DS18B20.getTempC( devAddr[i] );
         tempDev[i] = puffer1TempC;
@@ -171,65 +174,69 @@ void TempLoop(long now) {
       }
     }
 
-    // Safety check. If kazanTemp too high, then kazanSziv is on immediately.
-    if (kazanTempC > 88) {
-      digitalWrite(RELE1, LOW);
-      digitalWrite(LED_GREEN, HIGH);
-      kazanSzivOn = 1;
+    evaluateStatusMachine(flueGasTempC);
+
+    float pufferAvg = (puffer1TempC + puffer2TempC) / 2;
+    int boilerSafetyLimit = 88;
+    int safetyLimit = 88;
+    bool turnOff = false;
+    bool turnOn = true;
+    switch (statusMachine) {
+      case STANDBY:
+        safetyLimit = 92;
+        boilerSafetyLimit = 92;
+        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC < puffer1TempC);
+        turnOn = (boilerTempC > 64) && (boilerTempC > puffer1TempC);
+        break;
+      case HEATING_HIGH:
+        safetyLimit = 88;
+        boilerSafetyLimit = 88;
+        turnOff = (boilerTempC <= boilerSafetyLimit) && ((boilerTempC < pufferAvg - 1) || (boilerTempC < puffer1TempC - 3) || (boilerTempC < puffer2TempC));
+        turnOn = (boilerTempC > 64) && (boilerTempC > pufferAvg + 1) && (boilerTempC >= puffer1TempC - 3) && (boilerTempC >= puffer2TempC);
+        break;
+      case HEATING_LOW:
+        safetyLimit = 88;
+        boilerSafetyLimit = 88;
+        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC < puffer1TempC);
+        turnOn = (boilerTempC > 64) && (boilerTempC > puffer1TempC);
+        break;
+      default:
+        break;
     }
 
-    if (now - lastCheck > durationCheck) { //Check kazan and puffer temps in fixed time
-      evaluateStatusMachine(fustGazTempC);
+    // Safety check. If boilerTemp too high, then boiler pump is on immediately.
+    if (boilerTempC > boilerSafetyLimit) {
+      digitalWrite(RELE1, LOW);
+      digitalWrite(LED_GREEN, HIGH);
+      boilerPumpOn = 1;
+    }
 
-      float pufferAvg = (puffer1TempC + puffer2TempC) / 2;
-      int safetyLimit = 88;
-      bool turnOff = false;
-      bool turnOn = true;
-      switch (statusMachine) {
-        case STANDBY:
-          safetyLimit = 92;
-          turnOff = (kazanTempC <= 88) && (kazanTempC < puffer1TempC);
-          turnOn = (kazanTempC > 64) && (kazanTempC > puffer1TempC);
-          break;
-        case HEATING_HIGH:
-          safetyLimit = 88;
-          turnOff = (kazanTempC <= 88) && ((kazanTempC < pufferAvg - 1) || (kazanTempC < puffer1TempC - 3) || (kazanTempC < puffer2TempC));
-          turnOn = (kazanTempC > 64) && (kazanTempC > pufferAvg + 1) && (kazanTempC >= puffer1TempC - 3) && (kazanTempC >= puffer2TempC);
-          break;
-        case HEATING_LOW:
-          safetyLimit = 88;
-          turnOff = (kazanTempC <= 88) && (kazanTempC < puffer1TempC);
-          turnOn = (kazanTempC > 64) && (kazanTempC > puffer1TempC);
-          break;
-        default:
-          break;
-      }
-
-      if (kazanSzivOn == 1) {
-        if (turnOff || kazanTempC < 63) {
+    if (now - lastCheck > durationCheck) { //Check boiler and puffer temps in fixed time
+      if (boilerPumpOn == 1) {
+        if (turnOff || boilerTempC < 63) {
           digitalWrite(RELE1, HIGH);
           digitalWrite(LED_GREEN, LOW);
-          kazanSzivOn = 0;
+          boilerPumpOn = 0;
         }
       } else {
-        if (turnOn || (kazanTempC > 88)) {
+        if (turnOn || (boilerTempC > boilerSafetyLimit)) {
           digitalWrite(RELE1, LOW);
           digitalWrite(LED_GREEN, HIGH);
-          kazanSzivOn = 1;
+          boilerPumpOn = 1;
         }
       }
 
-      if (puffer2TempC > 88) {
+      if (puffer2TempC > safetyLimit) {
         digitalWrite(RELE2, LOW);
         digitalWrite(LED_RED, HIGH);
-        biztonsagiSzivOn = 1;
+        safetyPumpOn = 1;
       } else {
         digitalWrite(RELE2, HIGH);
         digitalWrite(LED_RED, LOW);
-        biztonsagiSzivOn = 0;
+        safetyPumpOn = 0;
       }
 
-      UdateThinkSpeakChannel(kazanTempC, puffer1TempC, puffer2TempC, fustGazTempC);
+      UdateThinkSpeakChannel(boilerTempC, puffer1TempC, puffer2TempC, flueGasTempC);
 
       lastCheck = millis();
     }
@@ -260,7 +267,7 @@ void HandleRoot() {
 
     String devAddress = GetAddressToString( devAddr[i] );
     String nameOfDev = "";
-    if (devAddress == KAZAN) {
+    if (devAddress == BOILER) {
       nameOfDev = "Kazan";
     } else if (devAddress == PUFFER_1_3M) {
       nameOfDev = "Puffer 1 (3M)";
@@ -279,7 +286,7 @@ void HandleRoot() {
     message += "</td></tr>\r\n";
     message += "\r\n";
   }
-  float fustGazTempC = thermocouple.readCelsius();
+  float flueGasTempC = thermocouple.readCelsius();
   message += "<tr><td>";
   message += "Fustgaz";
   message += "</td>\r\n";
@@ -287,30 +294,30 @@ void HandleRoot() {
   message += "kType";
   message += "</td>\r\n";
   message += "<td>";
-  message += fustGazTempC;
+  message += flueGasTempC;
   message += "</td></tr>\r\n";
   message += "\r\n";
   message += "</table>\r\n";
 
-  String kazanSzivOnString;
-  if (kazanSzivOn == 1) {
-    kazanSzivOnString = "On";
+  String boilerPumpOnString;
+  if (boilerPumpOn == 1) {
+    boilerPumpOnString = "On";
   } else {
-    kazanSzivOnString = "Off";
+    boilerPumpOnString = "Off";
   }
 
-  String biztonsagiSzivOnString;
-  if (biztonsagiSzivOn == 1) {
-    biztonsagiSzivOnString = "On";
+  String safetyPumpOnString;
+  if (safetyPumpOn == 1) {
+    safetyPumpOnString = "On";
   } else {
-    biztonsagiSzivOnString = "Off";
+    safetyPumpOnString = "Off";
   }
 
   message += "<br/><br/>";
   message += "<table border='1'>\r\n";
   message += "<tr><td>Szivattyu</td><td>On/Off</td></tr>\r\n";
-  message += "<tr><td>Kazan</td><td>" + kazanSzivOnString + "</td></tr>\r\n";
-  message += "<tr><td>Biztonsagi (Radiator)</td><td>" + biztonsagiSzivOnString + "</td></tr>\r\n";
+  message += "<tr><td>Kazan</td><td>" + boilerPumpOnString + "</td></tr>\r\n";
+  message += "<tr><td>Biztonsagi (Radiator)</td><td>" + safetyPumpOnString + "</td></tr>\r\n";
   message += "</table>\r\n";
 
   server.send(200, "text/html", message );
@@ -321,7 +328,29 @@ void HandleNotFound() {
   server.send(404, "text/html", message);
 }
 
+void connectWiFi() {
+  //Setup WIFI
+  WiFi.begin(ssid, password);
+  Serial.println("");
 
+  //Wait for WIFI connection
+  int WLcount = 0;
+  while (WiFi.status() != WL_CONNECTED && WLcount < 100 ) {
+    delay( 100 );
+    Serial.printf(".");
+    ++WLcount;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.print("Connected to ");
+    Serial.println(ssid);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Failed to connect Wifi:");
+    Serial.println(ssid);
+  }
+}
 //------------------------------------------
 void setup() {
   //Setup Serial port speed
@@ -337,20 +366,7 @@ void setup() {
   digitalWrite(LED_GREEN, LOW);
   digitalWrite(LED_RED, LOW);
 
-  //Setup WIFI
-  WiFi.begin(ssid, password);
-  Serial.println("");
-
-  //Wait for WIFI connection
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  connectWiFi();
 
   server.on("/", HandleRoot);
   server.onNotFound( HandleNotFound );
