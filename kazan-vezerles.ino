@@ -51,7 +51,7 @@ String writeAPIKey = "14JG781773HS7E82";
 const char* tsServer = "api.thingspeak.com";
 
 //Thinkgspeak update
-void UdateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferDownTemp, float flueGasTemp) {
+void UdateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferDownTemp, float fustGazTemp) {
   if (client.connect(tsServer, 80)) {
 
     // Construct API request body
@@ -67,7 +67,7 @@ void UdateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferD
     postStr += "&field5=";
     postStr += String(safetyPumpOn);
     postStr += "&field6=";
-    postStr += String(flueGasTemp);
+    postStr += String(fustGazTemp);
     postStr += "\r\n\r\n";
 
     client.print("POST /update HTTP/1.1\n");
@@ -139,11 +139,11 @@ void SetupDS18B20() {
   }
 }
 
-//evaluate status machine from flueGasTemp
-void evaluateStatusMachine(float flueGasTempC) {
-  if (flueGasTempC < 110) {
+//evaluate status machine from fustGazTemp
+void evaluateStatusMachine(float fustGazTempC) {
+  if (fustGazTempC < 110) {
     statusMachine = STANDBY;
-  } else if (flueGasTempC > 135) {
+  } else if (fustGazTempC > 135) {
     statusMachine = HEATING_HIGH;
   } else {
     statusMachine = HEATING_LOW;
@@ -153,13 +153,14 @@ void evaluateStatusMachine(float flueGasTempC) {
 //Loop measuring the temperature
 void TempLoop(long now) {
   if ( now - lastTemp > durationTemp ) {//Take a measurement at a fixed time (durationTemp = 5000ms, 5s)
+    Serial.println( "TempLoop called" );
     if (WiFi.status() != WL_CONNECTED) {
       connectWiFi();
     }
     float boilerTempC;
     float puffer1TempC;
     float puffer2TempC;
-    float flueGasTempC = thermocouple.readCelsius();
+    float fustGazTempC = thermocouple.readCelsius();
 
     for (int i = 0; i < ONE_WIRE_MAX_DEV; i++) {
       if (GetAddressToString( devAddr[i] ) == BOILER ) {
@@ -174,7 +175,7 @@ void TempLoop(long now) {
       }
     }
 
-    evaluateStatusMachine(flueGasTempC);
+    evaluateStatusMachine(fustGazTempC);
 
     float pufferAvg = (puffer1TempC + puffer2TempC) / 2;
     int boilerSafetyLimit = 88;
@@ -236,7 +237,7 @@ void TempLoop(long now) {
         safetyPumpOn = 0;
       }
 
-      UdateThinkSpeakChannel(boilerTempC, puffer1TempC, puffer2TempC, flueGasTempC);
+      UdateThinkSpeakChannel(boilerTempC, puffer1TempC, puffer2TempC, fustGazTempC);
 
       lastCheck = millis();
     }
@@ -286,7 +287,7 @@ void HandleRoot() {
     message += "</td></tr>\r\n";
     message += "\r\n";
   }
-  float flueGasTempC = thermocouple.readCelsius();
+  float fustGazTempC = thermocouple.readCelsius();
   message += "<tr><td>";
   message += "Fustgaz";
   message += "</td>\r\n";
@@ -294,7 +295,7 @@ void HandleRoot() {
   message += "kType";
   message += "</td>\r\n";
   message += "<td>";
-  message += flueGasTempC;
+  message += fustGazTempC;
   message += "</td></tr>\r\n";
   message += "\r\n";
   message += "</table>\r\n";
