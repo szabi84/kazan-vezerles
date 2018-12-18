@@ -186,7 +186,7 @@ void TempLoop(long now) {
       case STANDBY:
         safetyLimit = 92;
         boilerSafetyLimit = 92;
-        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC < puffer1TempC);
+        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC <= puffer1TempC);
         turnOn = (boilerTempC > 64) && (boilerTempC > puffer1TempC);
         break;
       case HEATING_HIGH:
@@ -198,7 +198,7 @@ void TempLoop(long now) {
       case HEATING_LOW:
         safetyLimit = 88;
         boilerSafetyLimit = 88;
-        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC < puffer1TempC);
+        turnOff = (boilerTempC <= boilerSafetyLimit) && (boilerTempC <= puffer1TempC);
         turnOn = (boilerTempC > 64) && (boilerTempC > puffer1TempC);
         break;
       default:
