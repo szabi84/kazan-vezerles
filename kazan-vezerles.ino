@@ -4,6 +4,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <MAX6675_Thermocouple.h>
+#include <ESP8266HTTPClient.h>
 
 #define VERSION "1.7"
 #define ONE_WIRE_BUS D3 //Pin to which is attached a temperature sensor
@@ -46,43 +47,29 @@ WiFiClient client;
 ESP8266WebServer server(80);
 
 //Thingspeak settings
+HTTPClient http;
 const int channelID = 391628;
 String writeAPIKey = "14JG781773HS7E82";
-const char* tsServer = "api.thingspeak.com";
+String tsServer = "http://api.thingspeak.com/update.json";
 
 //Thinkgspeak update
-void UdateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferDownTemp, float fustGazTemp) {
-  if (client.connect(tsServer, 80)) {
+void udateThinkSpeakChannel (float boilerTemp, float pufferUpTemp, float pufferDownTemp, float fustGazTemp) {
+  String params = "?api_key=" + writeAPIKey;
+  params += "&field1=" + String(boilerTemp);
+  params += "&field2=" + String(pufferUpTemp);
+  params += "&field3=" + String(pufferDownTemp);
+  params += "&field4=" + String(boilerPumpOn);
+  params += "&field5=" + String(safetyPumpOn);
+  params += "&field6=" + String(fustGazTemp);
 
-    // Construct API request body
-    String postStr = writeAPIKey;
-    postStr += "&field1=";
-    postStr += String(boilerTemp);
-    postStr += "&field2=";
-    postStr += String(pufferUpTemp);
-    postStr += "&field3=";
-    postStr += String(pufferDownTemp);
-    postStr += "&field4=";
-    postStr += String(boilerPumpOn);
-    postStr += "&field5=";
-    postStr += String(safetyPumpOn);
-    postStr += "&field6=";
-    postStr += String(fustGazTemp);
-    postStr += "\r\n\r\n";
+  http.begin(tsServer + params);
+  int httpCode = http.GET();
+  String payload = http.getString();
 
-    client.print("POST /update HTTP/1.1\n");
-    client.print("Host: api.thingspeak.com\n");
-    client.print("Connection: close\n");
-    client.print("X-THINGSPEAKAPIKEY: " + writeAPIKey + "\n");
-    client.print("Content-Type: application/x-www-form-urlencoded\n");
-    client.print("Content-Length: ");
-    client.print(postStr.length());
-    client.print("\n\n");
-    client.print(postStr);
-    client.print("\n\n");
+  Serial.println(httpCode);
+  Serial.println(payload);
 
-  }
-  client.stop();
+  http.end();
 }
 
 //Convert device id to String
@@ -157,6 +144,9 @@ void TempLoop(long now) {
     if (WiFi.status() != WL_CONNECTED) {
       connectWiFi();
     }
+    //dummy call
+    udateThinkSpeakChannel(50, 50, 50, 50);
+    
     float boilerTempC;
     float puffer1TempC;
     float puffer2TempC;
@@ -237,7 +227,7 @@ void TempLoop(long now) {
         safetyPumpOn = 0;
       }
 
-      UdateThinkSpeakChannel(boilerTempC, puffer1TempC, puffer2TempC, fustGazTempC);
+      udateThinkSpeakChannel(boilerTempC, puffer1TempC, puffer2TempC, fustGazTempC);
 
       lastCheck = millis();
     }
