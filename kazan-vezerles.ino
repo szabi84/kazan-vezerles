@@ -144,8 +144,6 @@ void TempLoop(long now) {
     if (WiFi.status() != WL_CONNECTED) {
       connectWiFi();
     }
-    //dummy call
-    udateThinkSpeakChannel(50, 50, 50, 50);
     
     float boilerTempC;
     float puffer1TempC;
